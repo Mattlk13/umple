@@ -22,6 +22,7 @@
 //
 
 require_once("compiler_config.php");
+require_once("Parsedown.php");
 
 // Allow CORS so that any site may use the Umple compiler.
 header("Access-Control-Allow-Origin: *");
@@ -57,6 +58,9 @@ if (isset($_REQUEST["save"]))
     list($dataname, $dataHandle) = getOrCreateDataHandle();
     if (isset($_REQUEST["lock"]) && isset($_REQUEST["model"])){
       $model = $_REQUEST["model"];
+  //file_put_contents("/home/jpan/test.html", ' ' . $model, FILE_APPEND);
+
+  //file_put_contents("/home/jpan/test.html", "111 " . $dataHandle->getWorkDir()->getPath(), FILE_APPEND);
       $lock_file = "../ump/".$model."/.lockfile";
       $fp = fopen($lock_file, "w");
       if (flock($fp, LOCK_EX)) {
@@ -84,9 +88,47 @@ else if (isset($_REQUEST["load"]))
   // extract the model ID and filename from the old-style path
   $filename = basename($_REQUEST["filename"]);
   $modelId = basename(dirname($_REQUEST["filename"]));
+  // echo $filename;
+  // echo $modelId;
+  if (isset($_REQUEST["isTask"]))
+  {
+    $modelId = "tasks/" . $modelId;
+  }
+  //file_put_contents("/home/jpan/test.html", $modelId . "///", FILE_APPEND);
   $dataHandle = dataStore()->openData($modelId);
   $outputUmple = $dataHandle->readData($filename);
   echo $outputUmple;
+}
+else if (isset($_REQUEST["loadTask"])) //load the task in the tasks dir
+{
+  foreach (new DirectoryIterator("../ump/tasks") as $file) 
+  {
+    if ($file->isDot()) continue;
+
+    if ($file->isDir() && substr($file->getFilename(), 0, 8) == "taskroot") 
+    {
+      $taskName = explode("-", $file->getFilename())[1];
+        if ($taskName == strtolower($_REQUEST["filename"]))
+        {
+          $dataHandle = dataStore()->openData("tasks/" . $file->getFilename());
+          $umpleCode = $dataHandle->readData("model.ump");
+          if (isset($_REQUEST["loadInstructionAsHTML"]))
+          {
+            $Parsedown = new Parsedown();
+            $instructions = $Parsedown->text($dataHandle->readData("instructions.md")); # prints: <p>Hello <em>Parsedown</em>!</p>
+          }
+          else
+          {
+            $instructions = $dataHandle->readData("instructions.md");
+          }
+          $json = json_decode($dataHandle->readData("taskdetails.json"), true);
+          $requestorName = $json["requestorName"];
+          $completionURL = $json["completionURL"];
+          echo $umpleCode . "task delimiter" . $instructions . "task delimiter" . $json["taskName"] . "task delimiter" . $file->getFilename() . "task delimiter" . $requestorName . "task delimiter" . $completionURL . "task delimiter" . $json["isExperiment"];
+          break;
+        }
+    }
+  }
 }
 else if (isset($_REQUEST["action"]))
 {
@@ -94,6 +136,7 @@ else if (isset($_REQUEST["action"]))
 }
 else if (isset($_REQUEST["umpleCode"]))
 {
+  //file_put_contents("/home/jpan/test.html", "BBBBBBBBBBBBBBBBBBBB", FILE_APPEND);
   $input = $_REQUEST["umpleCode"];
   $fulllanguage = $_REQUEST["language"];
   
@@ -121,6 +164,8 @@ else if (isset($_REQUEST["umpleCode"]))
   $Uigu2 = false;
   $htmlContents = false;
   $generatorType = "";
+  $svg_regex= "/scale\([0-9]*(\.([0-9])*)? [0-9]*(\.([0-9])*)?\) rotate\(0\)/";
+  $svg_scale="scale(0.75 0.75) rotate(0)";
   
   //featureDiagram
 
@@ -140,6 +185,8 @@ else if (isset($_REQUEST["umpleCode"]))
       $language = "GvFeatureDiagram";
       $generatorType = "";
       $featureDiagram = True;
+      $featureDependency = (strpos($suboptions, 'showFeatureDependency') !== false); 
+      
   }
   else if ($language == "classDiagram")
   {
@@ -364,59 +411,78 @@ else if (isset($_REQUEST["umpleCode"]))
           $command = $command . " " . $afile;
        }                  
        
-       exec($command);
-       exec("cd $thedir; rm javadocFromUmple.zip; zip -r javadocFromUmple javadoc");
+       exec($command." 2>&1",$outputlines,$retcode);
+       if(!file_exists("$thedir/javadoc")) {
+         // Javadoc failed
+         $html="Javadoc was not able to produced any output, since there are errors in the embedded Java. Look for syntax errors the embedded code in methods, guards, conditions and aspects . ";
+         foreach($outputlines as $outputline){
+           $foundresult=strstr($outputline,"error:");
+           if($foundresult != FALSE) $html = $html . "<br/><b>".$foundresult."</b>\n";
+         }
+       }
+       else {
+         exec("cd $thedir; rm javadocFromUmple.zip; zip -r javadocFromUmple javadoc");
        
-       $javadocdir = $workDir->makePermalink('javadoc/');
-       $javadoczip = $workDir->makePermalink('javadocFromUmple.zip');
-       $html = "<a href=\"{$javadoczip}\">Download the following as a zip file</a>&nbsp;{$errhtml}
-      <iframe width=100% height=1000 src=\"" . $javadocdir . "\">This browser does not
-      support iframes, so the javadoc cannot be displayed</iframe> 
-     ";
+         $javadocdir = $workDir->makePermalink('javadoc/');
+         $javadoczip = $workDir->makePermalink('javadocFromUmple.zip');
+         $html = "<a href=\"{$javadoczip}\" title=\"Download the Javadoc website as a Zip file if you would like to be able to install it locally\">Download the following as a zip file</a>&nbsp;{$errhtml}
+         <iframe width=100% height=1000 src=\"" . $javadocdir . "\">This browser does not
+         support iframes, so the javadoc cannot be displayed</iframe> 
+         ";
+       }
        echo $html;
     }  // end javadoc
     
     else if ($stateDiagram) {
       $thedir = dirname($outputFilename);
       exec("rm -rf " . $thedir . "/stateDiagram.svg");
-      $command = "dot -Tsvg -Gdpi=63 " . $thedir . "/model.gv -o " . $thedir .  "/stateDiagram.svg"; 
+      $command = "dot -Tsvg " . $thedir . "/model.gv -o " . $thedir .  "/stateDiagram.svg"; 
       exec($command);
             if (!file_exists($thedir . "/stateDiagram.svg") && file_exists("doterr.svg"))
             {
                 exec("cp " . "./doterr.svg " . $thedir . "/stateDiagram.svg");
             }
       $svgcode = readTemporaryFile("{$thedir}/stateDiagram.svg");
+      $gvlink = $workDir->makePermalink('model'.$generatorType.'.gv');      
       $svglink = $workDir->makePermalink('stateDiagram.svg');
-      $html = "<a href=\"umpleonline/$thedir/model.gv\">Download the GraphViz file for the following</a>&nbsp;<a href=\"$svglink\">Download the SVG file for the following</a>&nbsp;<br/>{$errhtml}&nbsp;
+      $html = "<a href=\"$gvlink\">Download the GraphViz file for the following</a>&nbsp;<a href=\"$svglink\">Download the SVG file for the following</a>&nbsp;<br/>{$errhtml}&nbsp;
       <svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" height=\"2000\" width=\"2000\">";
       echo $html;
-      echo $svgcode;
+      $changesToMake = 1;
+      $shrunksvgcode = preg_replace($svg_regex,$svg_scale,$svgcode,$changesToMake);
+      echo $shrunksvgcode;
       echo "</svg>"; 
     } // end state diagram
 
     else if ($featureDiagram) {
       $thedir = dirname($outputFilename);
       exec("rm -rf " . $thedir . "/featureDiagram.svg");
-      $command = "dot -Tsvg -Gdpi=63 " . $thedir . "/modelGvFeatureDiagram.gv -o " . $thedir .  "/featureDiagram.svg";
+      $graphviz_layout = "dot"; //default layout for feature diagram.
+      if($featureDependency)
+      $graphviz_layout = "circo";
+      $command = $graphviz_layout ." -Tsvg " . $thedir . "/modelGvFeatureDiagram.gv -o " . $thedir .  "/featureDiagram.svg";
       exec($command);
       if (!file_exists($thedir . "/featureDiagram.svg") && file_exists("doterr.svg"))
       {
         exec("cp " . "./doterr.svg " . $thedir . "/featureDiagram.svg");
       }
       $svgcode = readTemporaryFile("{$thedir}/featureDiagram.svg");
+      $gvlink = $workDir->makePermalink('modelGvFeatureDiagram.gv');
       $svglink = $workDir->makePermalink('featureDiagram.svg');
       
-      $html = "<a href=\featureDiagram.svg\">Download the GraphViz file for the following</a>&nbsp;<a href=\"$svglink\">Download the SVG file for the following</a>&nbsp;<br/>{$errhtml}&nbsp;
+      $html = "<a href=\"$gvlink\">Download the GraphViz file for the following</a>&nbsp;<a href=\"$svglink\">Download the SVG file for the following</a>&nbsp;<br/>{$errhtml}&nbsp;
       <svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" height=\"2000\" width=\"2000\">";
       echo $html;
-      echo $svgcode;
+      $changesToMake = 1;
+      $shrunksvgcode = preg_replace($svg_regex,$svg_scale,$svgcode,$changesToMake);
+      echo $shrunksvgcode;
       echo "</svg>";   
     }
     
     else if ($classDiagram) {
       $thedir = dirname($outputFilename);
       exec("rm -rf " . $thedir . "/classDiagram.svg");
-      $command = "dot -Tsvg -Gdpi=63 " . $thedir . "/model" . $generatorType . ".gv -o " . $thedir .  "/classDiagram.svg";
+      $command = "dot -Tsvg " . $thedir . "/model" . $generatorType . ".gv -o " . $thedir .  "/classDiagram.svg";
       exec($command);
             if (!file_exists($thedir . "/classDiagram.svg") && file_exists("doterr.svg"))
             {
@@ -428,14 +494,16 @@ else if (isset($_REQUEST["umpleCode"]))
       $html = "<a href=\"$gvlink\">Download the GraphViz file for the following</a>&nbsp;<a href=\"$svglink\">Download the SVG file for the following</a>&nbsp;<br/>{$errhtml}&nbsp;
       <svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" height=\"2000\" width=\"2000\">";
       echo $html;
-      echo $svgcode;
+      $changesToMake = 1;
+      $shrunksvgcode = preg_replace($svg_regex,$svg_scale,$svgcode,$changesToMake);
+      echo $shrunksvgcode;
       echo "</svg>";      
     } // end graphViz class diagram
 
     else if ($entityRelationshipDiagram) {
       $thedir = dirname($outputFilename);
       exec("rm -rf " . $thedir . "/entityRelationshipDiagram.svg");
-      $command = "dot -Tsvg -Gdpi=63 " . $thedir . "/modelerd.gv -o " . $thedir .  "/entityRelationshipDiagram.svg";
+      $command = "dot -Tsvg " . $thedir . "/modelerd.gv -o " . $thedir .  "/entityRelationshipDiagram.svg";
       exec($command);
       if (!file_exists($thedir . "/entityRelationshipDiagram.svg") && file_exists("doterr.svg"))
       {
@@ -447,7 +515,9 @@ else if (isset($_REQUEST["umpleCode"]))
       $html = "<a href=\"$gvlink\">Download the GraphViz file for the following</a>&nbsp;<a href=\"$erdiagramlink\">Download the SVG file for the following</a>&nbsp;<br/>{$errhtml}&nbsp;
       <svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" height=\"2000\" width=\"2000\">";
       echo $html;
-      echo $svgcode;
+      $changesToMake = 1;
+      $shrunksvgcode = preg_replace($svg_regex,$svg_scale,$svgcode,$changesToMake);
+      echo $shrunksvgcode;
       echo "</svg>";      
     } // end graphViz entity relationship diagram
     
@@ -462,7 +532,7 @@ else if (isset($_REQUEST["umpleCode"]))
       
       if (file_exists($thedir . "/yuml.png"))
       {
-        $dltext = "&nbsp;<a href=\"$imglink\">Download the PNG file for the image</a>&nbsp;<br/>
+        $dltext = "&nbsp;<a target=\"YmlImage\" href=\"$imglink\">Download the PNG file for the image</a>&nbsp;<br/>
       <img src=\"$imglink\"\>";
       }
       else
@@ -470,18 +540,24 @@ else if (isset($_REQUEST["umpleCode"]))
         // could not generate either because of Python problem
         // or the yuml server not delivering because it doesn't like automated systems
         $yumltxt = file_get_contents($thedir."/yuml.txt");        
-        $dltext = "&nbsp;<a target=\"yumlimg\" href=\"http://yuml.me/diagram/plain/class/".urlencode($yumltxt).".php\"> Click on this link to display the png in a different Tab (yuml.me doesn't like automated systems generating their images)</a>&nbsp;";
+        $dltext = "<a target=\"yumlimg\" href=\"http://yuml.me/diagram/plain/class/".$yumltxt.".php\">Click on this link to display the png in a different Tab (yuml.me doesn't like automated systems generating their images)</a>&nbsp;";
       }  
 
-      $html = "<a href=\"$yumllink\">Download the Yuml text for the yuml image</a>. You can then use this text to generate various image formats at <a target=\"yumlimg\" href=\"https://yuml.me/diagram/plain/class/draw\">yuml.me</a>&nbsp;<br/>$dltext";
+      $html = "<a target=\"YmlImage\" href=\"$yumllink\">Download the Yuml text for the yuml image</a>. You can then use this text to generate various image formats at <a target=\"yumlimg\" href=\"https://yuml.me/diagram/plain/class/draw\">yuml.me</a>&nbsp;<br/>$dltext";
       echo $html;
     } // end yuml diagram  
 
     else // This is where the Java, PHP and other output is placed on the screen
     {
        exec("cd $thedir; rm {$language}FromUmple.zip; zip -r {$language}FromUmple {$language}");
+       if($language=="Java") {
+         $controloextra=" As an alternative, you could also use control-o on a Mac or Linux machine to copy the Java code as well as compilation commands into your copy buffer; then in any terminal you would be able to paste the result to compile the Umple file to Java, with instructions on how to run any main program";
+       }
+       else {
+         $controloextra="";
+       }
        $archivelink = $workDir->makePermalink($language.'FromUmple.zip');
-       echo "<a href=\"$archivelink\" class=\"zipDownloadLink\">Download the following as a zip file</a>&nbsp;{$errhtml}<p>URL_SPLIT";
+       echo "<a href=\"$archivelink\" class=\"zipDownloadLink\" title=\"Download the generated code as a zip file. You can then unzip the result, compile it and run it on your own computer.".$controloextra."\">Download the following as a zip file</a>&nbsp;{$errhtml}<p>URL_SPLIT";
        echo $sourceCode;
     }
   }
@@ -505,7 +581,7 @@ else if (isset($_REQUEST["umpleCode"]))
 }  // end request has umpleCode
 else if (isset($_REQUEST["exampleCode"]))
 {
-  $filename = rootDir()."/ump/" . $_REQUEST["exampleCode"];
+  $filename = rootDir()."/umplibrary/" . $_REQUEST["exampleCode"];
   $outputUmple = readTemporaryFile($filename);
   echo $outputUmple;
 }

@@ -90,8 +90,8 @@ public class UmpleConsoleMainTest {
      } catch (IllegalStateException ise) {
       Assert.assertTrue(outErrIntercept.toString()
           .startsWith("Option:\'IDONTEXIST\' is not a recognized option"+System.lineSeparator()
-           +"For more detailed information go to http://manual.umple.org"+System.lineSeparator()
-           + "Usage: java -jar umple.jar [options] <umple_file>"+System.lineSeparator()+"Example: java -jar umple.jar airline.ump"+System.lineSeparator()));
+           +"For more detailed information go to https://manual.umple.org"+System.lineSeparator()
+           + "Usage: java -jar umple.jar [options] <umple_files>"+System.lineSeparator()+"Example: java -jar umple.jar airline.ump"+System.lineSeparator()));
      }
   }
   
@@ -128,6 +128,7 @@ public class UmpleConsoleMainTest {
 		    UmpleConsoleMain.main(args);
 
       Assert.assertEquals("Processing -> testclass1.ump"+System.lineSeparator()
+              + "  Compiled to target language Java"+System.lineSeparator()
               + "Success! Processed testclass1.ump."+System.lineSeparator()
               + "Success! Processed testclass2.ump."+System.lineSeparator(),
           outErrIntercept.toString());

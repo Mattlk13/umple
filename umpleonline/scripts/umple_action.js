@@ -17,6 +17,13 @@ Action.diagramInSync = true;
 Action.freshLoad = false;
 Action.gentime = new Date().getTime();
 Action.savedCanonical = "";
+Action.gdprHidden = false;
+Action.update = "";
+let justUpdatetoSaveLater = false;
+
+Action.setjustUpdatetoSaveLater = function(state){
+  justUpdatetoSaveLater = state;
+}
 
 Action.clicked = function(event)
 {
@@ -113,6 +120,10 @@ Action.clicked = function(event)
   {
     Action.showCodeInSeparateWindow();
   }
+  else if (action == "CopyCommandLine")
+  {
+    Action.copyCommandLineCode();
+  }  
   else if (action == "CopyEncodedURL")
   {
     Action.showEncodedURLCodeInSeparateWindow();
@@ -132,10 +143,78 @@ Action.clicked = function(event)
       }
     }
   }
+  else if (action == "CreateTask") 
+  {
+    jQuery("#taskArea").css("display","block");
+    //jQuery("#taskNameArea").css("display","block");
+    jQuery("#labelTaskName").css("display","block");
+    jQuery("#taskNameCell").css("display","block");
+    jQuery("#instructions").css("display","block");
+    jQuery("#isExperimentCell").css("display","block");
+    Layout.zoomResize();
+  }
+  else if (action == "LoadTask")
+  {
+    jQuery("#loadTaskNameArea").css("display","block");
+  }
+  else if (action == "LoadThisTask")
+  {
+    Action.loadTask(Page.getModel().split("-")[1], false);
+  }
+  else if (action == "RequestLoadTaskURL")
+  {
+    var taskname = Page.getModel().split("-")[1];
+    Action.copyToClp(window.location.hostname + "/bookmark.php?loadTaskWithURL=1&taskname=" + taskname + "&model=" + taskname);
+  }
+  else if (action == "RequestAllZip") 
+  {
+    if (document.getElementById("downloadTaskDirLink") === null)
+    {
+      var link = document.createElement("a");
+      link.setAttribute("href", "scripts/tab_control.php?downloadTaskUserDir=1&taskid=" + Page.getModel());
+      link.setAttribute('id', "downloadTaskDirLink");
+      var linkText = document.createTextNode("Download ZIP File From Here");
+      link.appendChild(linkText);
+      
+      var node = document.createElement("LI");   
+      node.appendChild(link);
+      document.getElementById("taskSubmenu").appendChild(node);
+    }
+    else
+    {
+      document.getElementById("downloadTaskDirLink").setAttribute("href", "scripts/tab_control.php?downloadTaskUserDir=1&taskid=" + Page.getModel());
+    }
+
+    setTimeout(function () {
+      document.getElementById("downloadTaskDirLink").remove();
+    }, 30000);
+  }
   else if (action == "DownloadFiles")
   {
     TabControl.useActiveTabTo(TabControl.saveTab)(Page.getUmpleCode());
-    window.location.href = "scripts/tab_control.php?download=1&&model=" + Page.getModel();
+    
+    // issue#1554
+    //window.location.href = "scripts/tab_control.php?download=1&&model=" + Page.getModel();
+    if (document.getElementById("downloadLink") === null)
+    {
+      var link = document.createElement("a");
+      link.setAttribute("href", "scripts/tab_control.php?download=1&&model=" + Page.getModel());
+      link.setAttribute('id', "downloadLink");
+      var linkText = document.createTextNode("Download ZIP File From Here");
+      link.appendChild(linkText);
+      
+      var node = document.createElement("LI");   
+      node.appendChild(link);
+      document.getElementById("saveLoad").appendChild(node);
+    }
+    else 
+    {
+      document.getElementById("downloadLink").setAttribute("href", "scripts/tab_control.php?download=1&&model=" + Page.getModel());
+    }
+
+    setTimeout(function () {
+      document.getElementById("downloadLink").remove();
+    }, 30000);
   }
   else if (action == "Undo")
   {
@@ -144,6 +223,15 @@ Action.clicked = function(event)
   else if (action == "Redo")
   {
     Action.redo();
+  }
+  else if (action == "Reindent") 
+  { 
+    var lines = Page.getRawUmpleCode().split("\n");
+    var cursorPos = Page.codeMirrorEditor.getCursor(true);
+    var whiteSpace = lines[cursorPos.line].match(/^\s*/)[0].length;
+    var lengthToFirstCh = cursorPos.ch - whiteSpace;
+    cursorPos.ch = lengthToFirstCh;
+    Action.reindent(lines, cursorPos);
   }
   else if (action == "ShowHideTextEditor")
   {
@@ -191,7 +279,8 @@ Action.clicked = function(event)
   }
   else if (action == "SyncDiagram")
   {
-    Action.processTyping("umpleModelEditorText", true);
+    Action.processTyping("codeMirrorEditor", true);
+    Page.codeMirrorEditor.focus();
   }
   else if (action == "PhotoReady")
   {
@@ -218,10 +307,22 @@ Action.clicked = function(event)
   else if (action == "ToggleTransitionLabels")
   {
     Action.toggleTransitionLabels();
-  }  
+  }
+  else if (action == "ToggleGuards")
+  {
+    Action.toggleGuards();
+  }
   else if (action == "ToggleGuardLabels")
   {
     Action.toggleGuardLabels();
+  }
+  else if (action == "AllowPinch")
+  {
+    Action.allowPinch();
+  }
+  else if (action == "ToggleFeatureDependency")
+  {
+    Action.toggleFeatureDependency();
   }
   else if(action == "StructureLink")
   {
@@ -303,9 +404,60 @@ Action.redoOrUndo = function(isUndo)
   {
     afterHistoryChange = "";
   }
+  
+  var delimiterLoc = afterHistoryChange.indexOf(Page.modelDelimiter);
+  var rawReplacement = "";
+  if(delimiterLoc == -1) {
+    rawReplacement = afterHistoryChange;
+  }
+  else {
+    rawReplacement = afterHistoryChange.substring(0,delimiterLoc);
+  }
+  var rawOriginal = Page.getRawUmpleCode().replace(Page.modelDelimiter, "");
+  var theDiff=Action.findDiff(rawOriginal, rawReplacement);
+  var prevLine=Action.getCaretPosition();
+
   Action.freshLoad = true;
   Page.setUmpleCode(afterHistoryChange);
   if (!Action.manualSync) Action.updateUmpleDiagram();
+
+  Action.setjustUpdatetoSaveLater(true);
+  
+  setTimeout(function () { // Delay so it doesn't get erased
+    // Page.setFeedbackMessage("Changed line "+theDiff[3]+" "+theDiff[1]);
+    if(theDiff[1] == theDiff[2])
+    {
+      // change was in diagram so leave caret where it is
+      Action.setCaretPosition(prevLine);
+    }
+    else
+    {
+      // set line number to where change occurred
+      Action.setCaretPosition(theDiff[3]);
+    }   
+  }, 300);
+}
+
+Action.findDiff = function(oldString, newString)
+{
+
+  var lineNumber = 0; // line number in newString
+  
+  var lOld = oldString.length, lNew = newString.length;
+  var l=lOld; // Assume old is shorter
+  if (lNew < l) l=lNew; // Actually new is shorter
+  var i=0;
+
+  while(i < l && oldString.charAt(i) === newString.charAt(i)) {
+    i++;
+    if(oldString.charAt(i) === '\n' && newString.charAt(i) === '\n') lineNumber++;
+  }
+  
+  // i is now the character index where the difference begins
+  var startChange=newString.substring(i,1);
+  
+  // Tuple is length of old, length of new, position of change, line number chg
+  return [lOld, lNew, i, lineNumber+1];
 }
 
 // Initial load of a file (e.g. example or blank) at initialization
@@ -314,7 +466,15 @@ Action.loadFile = function()
   var filename = Page.getFilename();
   if (filename != "")
   {
-    Ajax.sendRequest("scripts/compiler.php",Action.loadFileCallback,format("load=1&filename={0}",filename));
+    Action.setjustUpdatetoSaveLater(true);
+    if (Page.getModel().substring(0, 8) == "taskroot")
+    {
+      Ajax.sendRequest("scripts/compiler.php",Action.loadFileCallback,format("load=1&isTask=1&filename={0}",filename));
+    } 
+    else 
+    {
+      Ajax.sendRequest("scripts/compiler.php",Action.loadFileCallback,format("load=1&filename={0}",filename));
+    }
   }
   else
   {
@@ -328,9 +488,9 @@ Action.loadFileCallback = function(response)
   Action.freshLoad = true;
   // TODO: this resolves the loading issue but in a very hacky way. See PR#1402.
   if (Object.keys(TabControl.tabs).length > 1) return;
-
+  
   TabControl.getCurrentHistory().save(response.responseText,"loadFileCallback");
-  Page.setUmpleCode(response.responseText);
+  Page.setUmpleCode(response.responseText, true);
   if (TabControl.tabs[TabControl.getActiveTabId()].nameIsEphemeral)
   {
     var extractedName = TabControl.extractNameFromCode(response.responseText);
@@ -340,6 +500,225 @@ Action.loadFileCallback = function(response)
     }
   }
   if (!Action.manualSync) Action.updateUmpleDiagram();
+}
+
+Action.loadTask = function(taskName, isBookmark)
+{
+  jQuery("#showInstrcutionsArea").css("display","block");
+  if (!isBookmark)
+  {
+    Ajax.sendRequest("bookmark.php", Action.loadTaskBookmark,format("taskname={0}&model={0}",taskName));
+    //Ajax.sendRequest("scripts/compiler.php",Action.loadTaskCallback,format("loadTask=1&filename={0}",taskName));
+  } else {
+    if (Page.getModel().split("-")[0] == "task") // it is in task bookmark page. instruction can not be edited.
+    {
+      Ajax.sendRequest("scripts/compiler.php",Action.loadTaskExceptCodeCallback,format("loadTask=1&loadInstructionAsHTML=1&filename={0}",taskName));
+    }
+    else
+    {
+      Ajax.sendRequest("scripts/compiler.php",Action.loadTaskExceptCodeCallback,format("loadTask=1&filename={0}",taskName));
+    }
+  }
+}
+
+Action.loadTaskBookmark = function(response)
+{
+  if (response.responseText.split(" ")[0] == "Task")
+  {
+    window.alert("Load Task Failed! " + response.responseText);
+  }
+  else
+  {
+    window.location.href = "umple.php?model=" + response.responseText;
+  }
+}
+
+Action.loadTaskCallback = function(response)
+{
+  Action.freshLoad = true;
+  // TODO: this resolves the loading issue but in a very hacky way. See PR#1402.
+  if (Object.keys(TabControl.tabs).length > 1) return;
+
+  Action.setjustUpdatetoSaveLater(true);
+  TabControl.getCurrentHistory().save(response.responseText,"loadTaskCallback");
+  var responseArray = response.responseText.split("task delimiter");
+  Page.setUmpleCode(responseArray[0]);
+  //jQuery("#textareaShowInstrcutions").val(responseArray[1]);
+  //jQuery("#labelShowInstructions").text("Task Instructions: " + responseArray[2]);
+  if (TabControl.tabs[TabControl.getActiveTabId()].nameIsEphemeral)
+  {
+    var extractedName = TabControl.extractNameFromCode(responseArray[0]);
+    if (extractedName)
+    {
+      TabControl.useActiveTabTo(TabControl.renameTab)(extractedName, true);
+    }
+  }
+  if (!Action.manualSync) Action.updateUmpleDiagram();
+  TabControl.useActiveTabTo(TabControl.saveTab)(Page.getUmpleCode());
+  TabControl.saveActiveTabs();
+  window.location.href = "bookmark.php?taskname=" + responseArray[2] + "&model=" + responseArray[3];
+}
+
+Action.loadTaskExceptCodeCallback = function(response)
+{
+  Action.freshLoad = true;
+  // TODO: this resolves the loading issue but in a very hacky way. See PR#1402.
+  //if (Object.keys(TabControl.tabs).length > 1) return;
+
+  Action.setjustUpdatetoSaveLater(true);
+  TabControl.getCurrentHistory().save(response.responseText,"loadTaskExceptCodeCallback");
+  var responseArray = response.responseText.split("task delimiter");
+  jQuery("#labelInstructions").text("Instructions for task \"" + responseArray[2] + "\":");
+  jQuery("#requestorName").val(responseArray[4]);
+  jQuery("#labelInstructions").css("display","block");
+  jQuery("#taskArea").css("display","block");
+  if (Page.getModel().split("-")[0] == "task") // it is in task bookmark page. instruction can not be edited.
+  {
+    jQuery("#labelInstructions").text("Instructions for task \"" + responseArray[2] + "\":               Requestor Name:" + responseArray[4]);
+    jQuery("#labelCompletionURL").css("display", "none");
+    jQuery("#completionURLCell").css("display", "none");
+    jQuery("#labelRequestorName").css("display", "none");
+    jQuery("#requestorName").css("display", "none");
+    jQuery("#instructionsHTML").html(responseArray[1]);
+  }
+  else 
+  {
+    jQuery("#instructions").val(responseArray[1]);
+    jQuery("#instructions").css("display","block");
+    jQuery("#completionURL").val(responseArray[5]);
+    jQuery("#isExperimentCell").css("display", "inline");
+    jQuery("#isExperiment").prop('checked', responseArray[6] == 'true');
+    jQuery('#instructions').each(function () {
+      this.setAttribute('style', 'height:' + (this.scrollHeight) + 'px;overflow-y:hidden;');
+    }).on('input', function () {
+      this.style.height = 'auto';
+      this.style.height = (this.scrollHeight) + 'px';
+    });
+
+    //jQuery("#completionURL").css("width", responseArray[5].length + "ch");
+  }
+  // jQuery('#instructions').each(function () {
+  //   this.setAttribute('style', 'height:' + (this.scrollHeight) + 'px;overflow-y:hidden;');
+  // }).on('input', function () {
+  //   this.style.height = 'auto';
+  //   this.style.height = (this.scrollHeight) + 'px';
+  // });
+
+  if (TabControl.tabs[TabControl.getActiveTabId()].nameIsEphemeral)
+  {
+    var extractedName = TabControl.extractNameFromCode(responseArray[0]);
+    if (extractedName)
+    {
+      TabControl.useActiveTabTo(TabControl.renameTab)(extractedName, true);
+    }
+  }
+  Layout.zoomResize();
+}
+
+Action.submitLoadTask = function()
+{
+  var taskName = jQuery("#inputLoadTaskName").val();
+  let patt = /^(\w|\.|-)+$/;
+  if (!patt.test(taskName))//taskName.indexOf(" ") != -1 || taskName.indexOf("/") != -1 || taskName.indexOf("-") != -1 || taskName.indexOf("\\") != -1) 
+  {
+    window.alert("Task Name can only contain letters(case insensitive), underscores, dots, and digits!");
+    return;
+  }
+  Action.loadTask(taskName, false);
+}
+
+Action.submitTaskWork =function()
+{
+  Ajax.sendRequest("task.php", Action.submitTaskWorkCallback, format("submitTaskWork=1&model={0}&responseURL={1}", Page.getModel(), window.location.href));
+}
+
+Action.submitTaskWorkCallback = function(response)
+{
+  window.alert("Successfully submitted Task!");
+  var responseArray = response.responseText.split("task submit delimiter");
+  if (responseArray[0] == "")
+  {
+    window.location.href = responseArray[2];
+  }
+  else
+  {
+    window.location.href = responseArray[0] + "?task=" + responseArray[1] + "&url=" + responseArray[2];
+  }
+}
+
+Action.launchParticipantURL = function()
+{
+  var taskname = Page.getModel().split("-")[1];
+  window.open("bookmark.php?loadTaskWithURL=1&taskname=" + taskname + "&model=" + taskname);
+}
+
+Action.copyParticipantURL = function()
+{
+  var taskname = Page.getModel().split("-")[1];
+  var copiedURL = window.location.hostname + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) + "/bookmark.php?loadTaskWithURL=1&taskname=" + taskname + "&model=" + taskname;
+  Action.copyToClp(copiedURL);
+  Page.setFeedbackMessage("Participant URL is in copy buffer: " + copiedURL);
+}
+
+Action.copyToClp = function(txt){
+    prenode=document.createElement("PRE");
+    txt = document.createTextNode(txt);
+    prenode.appendChild(txt);
+    var m = document;
+    var w = window;
+    var b = m.body;
+    b.appendChild(prenode);
+
+    if (b.createTextRange) {
+        var d = b.createTextRange();
+        d.moveToElementText(txt);
+        d.select();
+        m.execCommand('copy');
+    } 
+    else {
+        var d = m.createRange();
+        var g = w.getSelection;
+        d.selectNodeContents(txt);
+        g().removeAllRanges();
+        g().addRange(d);
+        m.execCommand('copy');
+        g().removeAllRanges();
+    }
+    prenode.remove();
+}
+
+Action.openInstructionInNewTab = function()
+{
+  jQuery("#buttonReshowInstructions").css("display", "inline");
+  // var winPrint = window.open('', '', 'left=0,top=0,width=800,height=600,toolbar=0,scrollbars=0,status=0');
+  // winPrint.document.write("<!DOCTYPE html><html><head><title>Instructions</title></head><body>" + jQuery("#instructionsHTML").html() + "</body></html>");
+  // winPrint.document.close();
+  // winPrint.focus();
+  var tab = window.open('about:blank', '_blank');
+  tab.document.write(jQuery("#instructionsHTML").html()); // where 'html' is a variable containing your HTML
+  tab.document.close();
+  jQuery("#instructionsHTML").css("display", "none");
+  jQuery("#labelInstructions").css("display", "none");
+  jQuery("#buttonHideInstructions").css("display", "none");
+  Layout.zoomResize();
+}
+
+Action.reshowInstructions = function()
+{
+  jQuery("#instructionsHTML").css("display", "block");
+  jQuery("#labelInstructions").css("display", "inline");
+  jQuery("#buttonReshowInstructions").css("display", "none");
+  jQuery("#buttonHideInstructions").css("display", "inline");
+  Layout.zoomResize();
+}
+
+Action.hideInstructions = function()
+{
+  jQuery("#instructionsHTML").css("display", "none");
+  jQuery("#labelInstructions").css("display", "none");
+  jQuery("#buttonHideInstructions").css("display", "none");
+  jQuery("#buttonReshowInstructions").css("display", "inline");
+  Layout.zoomResize();
 }
 
 Action.saveNewFile = function()
@@ -361,6 +740,8 @@ Action.saveNewFileCallback = function(response)
 Action.changeDiagramType = function(newDiagramType)
 {
   var changedType = false;
+  jQuery(".layoutListItem").hide();
+
   if(newDiagramType.type == "editableClass") { 
     if(Page.useEditableClassDiagram) return;
     Page.useEditableClassDiagram = true;
@@ -372,6 +753,9 @@ Action.changeDiagramType = function(newDiagramType)
     changedType = true;
     jQuery("#buttonShowEditableClassDiagram").prop('checked', 'checked');
     Page.setDiagramTypeIconState('editableClass');
+    jQuery(".view_opt_class").show();
+    jQuery(".view_opt_class_palette").show();
+
   }
   else if(newDiagramType.type == "JointJSClass") { 
     if(Page.useJointJSClassDiagram) return;
@@ -384,6 +768,8 @@ Action.changeDiagramType = function(newDiagramType)
     changedType = true;
     jQuery("#buttonShowJointJSClassDiagram").prop('checked', 'checked');
     Page.setDiagramTypeIconState('JointJSClass');
+    jQuery(".view_opt_class").show();
+    jQuery(".view_opt_class_palette").show();
   }  
   else if(newDiagramType.type == "GvClass") { 
     if(Page.useGvClassDiagram) return;
@@ -396,6 +782,8 @@ Action.changeDiagramType = function(newDiagramType)
     changedType = true;
     jQuery("#buttonShowGvClassDiagram").prop('checked', 'checked');
     Page.setDiagramTypeIconState('GvClass');
+    jQuery(".view_opt_class").show();
+
   }
   else if(newDiagramType.type == "GvState") {
     if(Page.useGvStateDiagram) return;
@@ -408,6 +796,8 @@ Action.changeDiagramType = function(newDiagramType)
     changedType = true;
     jQuery("#buttonShowGvStateDiagram").prop('checked', 'checked');
     Page.setDiagramTypeIconState('GvState');
+    jQuery(".view_opt_state").show();
+
   }
   else if(newDiagramType.type == "GvFeature") {
    if(Page.useGvFeatureDiagram) return;
@@ -420,6 +810,9 @@ Action.changeDiagramType = function(newDiagramType)
     changedType = true;
     jQuery("#buttonShowGvFeatureDiagram").prop('checked', 'checked');
     Page.setDiagramTypeIconState('GvFeature');
+    jQuery(".view_opt_feature").show();
+
+
   }
   else if(newDiagramType.type == "structure") { // Structure Diagram
     if(Page.useGvStructureDiagram) return;
@@ -475,6 +868,21 @@ Action.uiguCallback = function(response)
   jQuery(uiguSelector).hideLoading();
   window.open("scripts/compiler.php?asUI=" + filename, "showUserInterface");
   Page.showViewDone();
+}
+
+Action.copyCommandLineCode = function()
+{
+  var pretext="sh\n";
+  pretext+="echo Will compile umple file. Requires umple command to be installed\n";
+  pretext+="cd ~/tmp\n";
+  pretext+="mkdir testump-$$\n";
+  pretext+="cd testump-$$\n";
+  pretext+="cat >> test.ump <<ENDUMP\n";
+  var posttext="\nENDUMP\n";
+  posttext+="umple test.ump -c -\n";
+  posttext+="echo Use ctrl-D to exit back to the original shell\n\n";
+  Action.copyToClp(pretext+Page.getUmpleCode()+posttext);
+  Page.setFeedbackMessage("Shell code to compile on command line was copied to clipboard");  
 }
 
 Action.showCodeInSeparateWindow = function()
@@ -578,6 +986,7 @@ Action.unselectAll = function()
   Action.classSelected(null);
   Action.associationSelected(null);
   Action.generalizationSelected(null);
+  Action.transitionSelected(null);
 }
 
 Action.classClicked = function(event)
@@ -629,6 +1038,39 @@ Action.classClicked = function(event)
   }
 }
 
+Action.stateClicked = function(event)
+{
+    Page.setFeedbackMessage("state clicked");
+    if (!Action.diagramInSync) return;
+    Action.focusOn("umpleCanvas", true);
+    Action.focusOn("umpleModelEditorText", false);
+
+    Action.unselectAll();
+    Action.elementClicked = true;
+    var obj = event.currentTarget;
+
+    Action.selectState(obj.id);
+
+
+   if (Page.selectedItem == "AddTransition")
+    {
+        if (DiagramEdit.newTransition == null)
+        {
+            Action.canCreateByDrag = false;
+            DiagramEdit.createTransitionPartOne(event);
+        }
+        else
+        {
+            DiagramEdit.createTransitionPartTwo(event);
+            setTimeout(function(){ Action.canCreateByDrag = true; }, 500);
+        }
+    }
+    else
+    {
+        Action.stateSelected(obj);
+    }
+}
+
 Action.associationClicked = function(event)
 {
   if (!Action.diagramInSync) return;
@@ -639,6 +1081,16 @@ Action.associationClicked = function(event)
   Action.associationSelected(obj);
 }
 
+Action.transitionClicked = function(event)
+{
+    Page.setFeedbackMessage("transition clicked");
+  if(!Action.diagramInSync) return;
+  Action.elementClicked = true;
+  Action.unselectAll();
+
+  var obj = event.currentTarget;
+  Action.transitionSelected(obj);
+}
 Action.generalizationClicked = function(event)
 {
   if (!Action.diagramInSync) return;
@@ -667,6 +1119,26 @@ Action.associationHover = function(event,isHovering)
     }
   }
 }
+
+Action.transitionHover = function(event,isHovering)
+{
+    if (!Action.diagramInSync) return;
+    var updateTransition = event.currentTarget;
+    var umpleTransition = UmpleSystem.findTransition(updateTransition.id);
+
+    if (updateAssociation != null && Page.canShowHovers())
+    {
+        var hoverCount = 2;
+        var selector = "#" + updateAssociation.id + "_hover";
+
+        for (var i=0; i<hoverCount; i++)
+        {
+            if (isHovering) jQuery(selector+i).show();
+            else jQuery(selector+i).hide();
+        }
+    }
+}
+
 
 Action.generalizationHover = function(event,isHovering)
 {
@@ -718,6 +1190,43 @@ Action.associationSelected = function(obj)
     if (isSelected) jQuery(anchorSelector + i).show();
     else jQuery(anchorSelector + i).hide();
   }
+}
+
+Action.transitionSelected = function(obj)
+{
+    // Page.setFeedbackMessage("transition selected");
+    var isSelected = (obj == null) ? false : true;
+    var updateObj = null;
+
+    if (Page.selectedItem == "DeleteEntity" && obj != null)
+    {
+        var addToQueue = false;
+        DiagramEdit.transitionDeleted(obj.id, addToQueue);
+        return;
+    }
+
+    if (obj != null)
+    {
+        Page.selectedTransition = obj;
+        updateObj = obj;
+    }
+    else if (Page.selectedTransition != null)
+    {
+        updateObj = Page.selectedTransition;
+        Page.selectedTransition = null;
+    }
+    else
+    {
+        return;
+    }
+
+    var anchorCount = 2;
+    var anchorSelector = "#" + updateObj.id + "_anchor";
+    for (var i=0; i<anchorCount; i++)
+    {
+        if (isSelected) jQuery(anchorSelector + i).show();
+        else jQuery(anchorSelector + i).hide();
+    }
 }
 
 Action.generalizationSelected = function(obj)
@@ -797,7 +1306,7 @@ Action.photoReady = function()
   var canvasSel = "#" + Page.umpleCanvasId();
   if (Page.isPhotoReady())
   {
-    jQuery(canvasSel).addClass("photoReady");  
+    jQuery(canvasSel).addClass("photoReady");
   }
   else
   {
@@ -835,6 +1344,10 @@ Action.classMouseDown = function(event)
   {
     DiagramEdit.createGeneralizationPartOne(event);
   }
+  else if (Page.selectedItem == "AddTransition" && DiagramEdit.newTransition == null)
+  {
+      DiagramEdit.createTransitionPartOne(event);
+  }
 }
 
 Action.classMouseUp = function(event)
@@ -848,6 +1361,9 @@ Action.classMouseUp = function(event)
   else if (Page.selectedItem == "AddGeneralization" && DiagramEdit.newGeneralization != null)
   {
     DiagramEdit.createGeneralizationPartTwo(event);
+  }
+  else if (Page.selectedItem == "AddTransition" && DiagramEdit.newTransition != null){
+    DiagramEdit.createTransitionPartTwo(event);
   }
 }
 
@@ -869,6 +1385,10 @@ Action.mouseMove = function(event)
   if (DiagramEdit.newAssociation != null && Page.selectedItem == "AddAssociation")
   {
     Action.drawAssociationLine(event, DiagramEdit.newAssociation);
+  }
+  if (DiagramEdit.newTransition != null && Page.selectedItem == "AddTransition")
+  {
+    Action.drawTransitionLine(event, Diagramedit.newTransition);
   }
   if (DiagramEdit.newGeneralization != null && Page.selectedItem == "AddGeneralization")
   {
@@ -907,6 +1427,15 @@ Action.drawAssociationLine = function(event, newAssociation)
   jQuery(canvasSelector).append(newAssociation.drawable());
 }
 
+Action.drawTransitionLine = function(event, newTransition)
+{
+    var canvasSelector = "#" + Page.umpleCanvasId();
+    var mousePosition = new UmplePosition(event.pageX, event.pageY,0,0);
+    newTransition.toStatePosition = mousePosition.subtract(UmpleSystem.position());
+    jQuery(canvasSelector).append(newTransition.drawable());
+}
+
+
 Action.drawGeneralizationLine = function(event, newGeneralization)
 {
   var canvasSelector = "#" + Page.umpleCanvasId();
@@ -941,6 +1470,14 @@ Action.umpleCanvasClicked = function(event)
       DiagramEdit.removeNewAssociation();
     }
   }
+  else if (Page.selectedItem == "AddTransition" && DiagramEdit.newTransition != null)
+  {
+    if (Page.clickCount >1)
+    {
+      DiagramEdit.removeNewTransition();
+    }
+  }
+
   else if (Page.selectedItem == "AddGeneralization" && DiagramEdit.newGeneralization != null)
   {
     if (Page.clickCount > 1)
@@ -966,10 +1503,13 @@ Action.directUpdateCommandCallback = function(response)
 // such as adding/deleting/moving/renaming class/assoc/generalization
 Action.updateUmpleTextCallback = function(response)
 {
-  TabControl.getCurrentHistory().save(response.responseText, "TextCallback");
+  if (!justUpdatetoSaveLater){
+    TabControl.getCurrentHistory().save(response.responseText, "TextCallback");
+    Page.setExampleMessage("");
+  }
   Action.freshLoad = true;
-
-  Page.setUmpleCode(response.responseText);
+  
+  Page.setUmpleCode(response.responseText, Action.update.codeChange);
   // DEBUG
   // Page.setFeedbackMessage("update text callback -");
   // Page.catFeedbackMessage(response.responseText);
@@ -980,9 +1520,10 @@ Action.updateUmpleTextCallback = function(response)
   if (DiagramEdit.textChangeQueue.length == 0) 
   {
     DiagramEdit.pendingChanges = false;
+    Action.setjustUpdatetoSaveLater(false);
   }
-  else
-  {
+  else{
+    Action.setjustUpdatetoSaveLater(true);
     DiagramEdit.doTextUpdate();
   }
   
@@ -996,6 +1537,7 @@ Action.setExampleType = function setExampleType()
   jQuery("#itemLoadExamples").hide();
   jQuery("#itemLoadExamples2").hide();
   jQuery("#itemLoadExamples3").hide();
+  jQuery("#itemLoadExamples4").hide();
      
   if(Page.getExampleType() == "cdModels") {
      jQuery("#itemLoadExamples").show();
@@ -1004,6 +1546,10 @@ Action.setExampleType = function setExampleType()
    else if(Page.getExampleType() == "smModels") {
      jQuery("#itemLoadExamples2").show();
      jQuery("#defaultExampleOption2").prop("selected",true);
+   }
+   else if(Page.getExampleType() == "featureModels") {
+     jQuery("#itemLoadExamples4").show();
+     jQuery("#defaultExampleOption4").prop("selected",true);
    }
    else {
      jQuery("#itemLoadExamples3").show();
@@ -1030,14 +1576,18 @@ Action.loadExample = function loadExample()
   var diagramType="";
   if(Page.useGvStateDiagram) {
     diagramType="&diagramtype=state";
-    jQuery("#genjava").prop("selected",true);
+    //jQuery("#genjava").prop("selected",true);
+  }
+ else if(Page.useGvFeatureDiagram) {
+    diagramType="&diagramtype=GvFeature";
+    //jQuery("#genjava").prop("selected",true);
   }
   else if(Page.useStructureDiagram) {
     diagramType="&diagramtype=structure&generateDefault=cpp";
-    jQuery("#gencpp").prop("selected",true);
+    //jQuery("#gencpp").prop("selected",true);
   }
   else {
-    jQuery("#genjava").prop("selected",true);
+    //jQuery("#genjava").prop("selected",true);
   }
   
   var largerSelector = "#buttonLarger";
@@ -1051,6 +1601,7 @@ Action.loadExample = function loadExample()
   
   var newURL="?example="+exampleName+diagramType;
   Page.setExampleMessage("<a href=\""+newURL+"\">URL for "+exampleName+" example</a>");
+
  // TODO - fix so history works nicely
  //   if(history.pushState) {history.pushState("", document.title, newURL);}
            
@@ -1062,10 +1613,11 @@ Action.loadExampleCallback = function(response)
   Action.freshLoad = true;
   Page.setUmpleCode(response.responseText);
   Page.hideLoading();
-  TabControl.getCurrentHistory().save(response.responseText, "loadExampleCallback");
   Action.updateUmpleDiagram();
   Action.setCaretPosition("0");
   Action.updateLineNumberDisplay();
+  TabControl.getCurrentHistory().save(response.responseText, "loadExampleCallback");
+  Action.setjustUpdatetoSaveLater(true);
 }
 
 Action.customSizeTyped = function()
@@ -1213,6 +1765,11 @@ Action.setCaretPosition = function(line)
   if(isNaN(line-0)) 
   {
     // It is not a number so must be a special hidden command
+    if(line=="gd") 
+    {
+      jQuery('#gdprtext').show();
+      Action.gdprHidden = false;      
+    }
     if(line=="av") 
     {
       // Special backdoor to turn on experimental features
@@ -1225,6 +1782,49 @@ Action.setCaretPosition = function(line)
       document.getElementById('advancedMode').value=2;
       Page.setFeedbackMessage("Debug Mode");
       return;
+    }
+    if(line=="sp")
+    { // creates Survey Pass; modifies conditions to allow for survey to be displayed:
+      // includes setting RandomizedFrequency to 1, MinutesBeforePrompt to 5 secs, EditsBeforePrompt to 1;
+      if (existSCookie("surveyCookie")==null && window.localStorage.getItem("surveyShown")==null){
+        if (document.getElementById("styleTip")!=null)
+          document.getElementById("styleTip").innerHTML="";
+        window.randomSurveyRoll = 1;
+        window.surveyData.EditsBeforePrompt=1;
+        timeSurveyUp = false;
+        clearTimeout(timeSurvey);
+        timeSurvey = setTimeout(function(){timeSurveyUp = true;}, 10000);
+        timeSurvey;
+        displayedText=false;
+        if (!displayedText){
+          beforeInstance = TabControl.getCurrentHistory().currentIndex;
+          document.addEventListener("mouseover", function(){
+            if (TabControl.getCurrentHistory().currentIndex-beforeInstance >= 1 && !displayedText && timeSurveyUp){
+                displaySurvey();
+                this.removeEventListener('mouseover', arguments.callee);
+            }                        
+          });
+        }
+      }
+      
+    }
+    if (line=="sc")
+    { // clears all survey cookies including whether URL has been shown already, whether the user has been skipped, and whether Survey Pass has been activated
+      // run twice for it to be effective
+      let setToExpire=new Date();
+      setToExpire.setTime(setToExpire.getTime()-1000);
+      document.cookie="surveyCookie=done; expires="+setToExpire.toUTCString()+"; path=/;";
+      window.localStorage.removeItem("surveyShown");
+      document.addEventListener("mouseover", function(){});
+      setCookieBeforeClose("off");
+    }
+    if(line=="tc")
+    { // resets cookies for tips
+      Page.setFeedbackMessage("Clearing tip cookies");
+      let currentTime=new Date();
+      currentTime.setTime(currentTime.getTime()-1000);
+      window.localStorage.removeItem("first_time");
+      document.cookie="tipCookie=done; expires="+currentTime.toUTCString()+"; path=/;";
     }
     if(line.substr(0,2)=="cm") 
     {
@@ -1346,7 +1946,8 @@ Action.directAddClass = function(className) {
 
   var umpleJson = Json.toString({"position" : {"x" : "10","y" : "10","width" : "109","height" : "41"},"name" : className});
 
-  Page.setFeedbackMessage("Adding class "+className);  
+  Page.setFeedbackMessage("Adding class "+className);
+  Action.setjustUpdatetoSaveLater(false);
   Action.ajax(Action.directUpdateCommandCallback,format("action=addClass&actionCode={0}",umpleJson));
 
   // After a pause to let the ajax return, then redraw the diagram.
@@ -1474,6 +2075,15 @@ Action.selectClass = function(className)
 	Action.selectItem(scursor, ncursor);
 }
 
+// Highlights the text of the class that is currently selected.
+Action.selectState = function(stateName)
+{
+    var scursor = new RegExp("(class|interface|trait) "+stateName+"($|\\\s|[{])");
+    var ncursor = new RegExp("(class|interface|trait) [A-Za-z]");
+
+    Action.selectItem(scursor, ncursor);
+}
+
 Action.selectStateInClass = function(stateName, classname) 
 {
   if(Page.codeMirrorOn) {}
@@ -1515,13 +2125,14 @@ Action.umpleCodeMirrorCursorActivity = function() {
 }
 
 Action.umpleCodeMirrorTypingActivity = function() {
-  if(Action.freshLoad == false) {
+  if(Action.freshLoad == false && !justUpdatetoSaveLater) {
     Page.codeMirrorEditor.save();
     Action.umpleTypingActivity("codeMirrorEditor");
   }
   else {
     Action.freshLoad = false;
   }
+    Action.setjustUpdatetoSaveLater(false);
 }
 
 Action.trimMultipleNonPrintingAndComments = function(text) {
@@ -1587,12 +2198,12 @@ Action.umpleTypingActivity = function(target) {
     Action.diagramInSync = false;
     Page.enableDiagram(false);
   }
-  
+  //Action.processTyping("codeMirrorEditor", true);
+  //return;
   if (Action.oldTimeout != null)
   {
     clearTimeout(Action.oldTimeout);
   }
-  
   if(target == "diagramEdit") Action.oldTimeout = setTimeout('Action.processTyping("' + target + '",' + false + ')', 500);
   else Action.oldTimeout = setTimeout('Action.processTyping("' + target + '",' + false + ')', Action.waiting_time);
 }
@@ -1602,9 +2213,8 @@ Action.processTyping = function(target, manuallySynchronized)
   // Save in history after a pause in typing
   if (target != "diagramEdit") 
   {
-    TabControl.getCurrentHistory().save(Page.getUmpleCode(), "processTyping");
+    Action.setjustUpdatetoSaveLater(true);
   }
-  Page.setExampleMessage("");
   
   if (!Action.manualSync || manuallySynchronized)
   {
@@ -1612,6 +2222,12 @@ Action.processTyping = function(target, manuallySynchronized)
     
     if (target == "umpleModelEditorText" || target == "codeMirrorEditor") {
       Action.updateLayoutEditorAndDiagram();
+
+      // issue#1554
+      var downloadLink = document.getElementById("downloadLink");
+      if (downloadLink !== null){
+        downloadLink.remove();
+      }
       
       Page.enablePaletteItem("buttonSyncDiagram", false);
     }
@@ -1622,6 +2238,12 @@ Action.processTyping = function(target, manuallySynchronized)
     
     //Page.enableDiagram(true);
   }
+
+  if (target != "diagramEdit"){
+    TabControl.getCurrentHistory().save(Page.getUmpleCode(), "processTyping");
+    Page.setExampleMessage("");
+  }
+
 }
 
 Action.updateLayoutEditorAndDiagram = function()
@@ -1745,7 +2367,6 @@ Action.updateUmpleDiagramCallback = function(response)
           //paper.scaleContentToFit({padding: 15});
         }
       };
-
       // using the umpleCanvas as the mouse wheel event target, as it is a stable entity
       var paperHolder = document.getElementById("umpleCanvas");
 
@@ -1766,6 +2387,8 @@ Action.updateUmpleDiagramCallback = function(response)
     else if(Page.useGvClassDiagram || Page.useGvStateDiagram || Page.useGvFeatureDiagram )
     {
       jQuery("#umpleCanvas").html(format('{0}', diagramCode));
+      jQuery("#umpleCanvas").children().first().attr("id", "svgCanvas");
+      Action.setupPinch();
     }
     //Display structure diagram
     else if(Page.useStructureDiagram)
@@ -1966,12 +2589,26 @@ Action.toggleTransitionLabels = function()
   Action.redrawDiagram();
 }
 
+Action.toggleGuards = function()
+{
+  Page.showGuards = !Page.showGuards;
+  Action.redrawDiagram();
+}
 Action.toggleGuardLabels = function()
 {
   Page.showGuardLabels = !Page.showGuardLabels;
   Action.redrawDiagram();
 }
-
+Action.allowPinch = function()
+{
+  Page.allowPinch = !Page.allowPinch;
+  Action.redrawDiagram();
+}
+Action.toggleFeatureDependency = function()
+{
+  Page.showFeatureDependency = !Page.showFeatureDependency;
+  Action.redrawDiagram();
+}
 Action.toggleTraits = function()
 {
   Page.showTraits = !Page.showTraits;
@@ -1998,11 +2635,13 @@ Action.redrawDiagram = function()
 
       Page.enablePaletteItem('buttonAddClass', true);
       Page.enablePaletteItem('buttonAddAssociation', true);
+      Page.enablePaletteItem('buttonAddTransition', true);
       Page.enablePaletteItem('buttonAddGeneralization', true);
       Page.enablePaletteItem('buttonDeleteEntity', true);
     
       Page.initToggleTool('buttonAddClass');
       Page.initToggleTool('buttonAddAssociation');
+      Page.initToggleTool('buttonAddTransition');
       Page.initToggleTool('buttonAddGeneralization');
       Page.initToggleTool('buttonDeleteEntity');
     }
@@ -2099,7 +2738,6 @@ Action.ajax = function(callback,post,errors,tabIndependent)
     }
     callback(response);
   } : callback;
-
   Ajax.sendRequest("scripts/compiler.php",wrappedCallback,format("{0}&error={3}&umpleCode={1}&filename={2}",post,umpleCode,filename,errors));
 }
 
@@ -2222,6 +2860,7 @@ Mousetrap.bind(['ctrl+j'], function(e){
   return false; //equivalent to e.preventDefault();
 });
 
+
 Mousetrap.bind(['ctrl+g'], function(e){
   Page.clickShowGvClassDiagram();
   return false; //equivalent to e.preventDefault();
@@ -2284,6 +2923,11 @@ Mousetrap.bind(['ctrl+b'], function(e){
   return false;
 });
 
+Mousetrap.bind(['ctrl+o'], function(e){
+  Action.copyCommandLineCode();
+  return false;
+});
+
 // Functions for editing the diagram - using shift
 Mousetrap.bind(['g'], function(e){
   if(jQuery('#umpleCanvasColumn').hasClass('focus') 
@@ -2320,23 +2964,28 @@ Mousetrap.bind(['c'], function(e){
 
 Action.toggleTabsCheckbox = function(language)
 {
-	// Workaround for TextUml having java prefix
-	if($("inputGenerateCode").value.split(":")[1] == "TextUml"){
-		language = "TextUml";
-	}
+  // Workaround for TextUml having java prefix
+  if($("inputGenerateCode").value.split(":")[1] == "TextUml"){
+    language = "TextUml";
+  }
 
-	if(language == "java" || language == "php" || language == "cpp" 
-    || language == "ruby" || language == "sql"){
-		jQuery("#ttTabsCheckbox").show();
-		jQuery("#tabRow").show();
-	}
-	else{
-		jQuery("#ttTabsCheckbox").hide();
-		jQuery("#tabRow").hide();
-		if(jQuery('#buttonTabsCheckbox').is(':checked')){
-			jQuery('#buttonTabsCheckbox').click();
-		}
-	}
+  if(language == "java" || language == "php" || language == "cpp" 
+    || language == "ruby" || language == "sql") {
+    jQuery("#ttTabsCheckbox").show();
+    jQuery("#tabRow").show();
+
+    if ($("inputGenerateCode").value.split(":")[1] == "UmpleSelf" || $("inputGenerateCode").value.split(":")[1] == "Json") {
+      jQuery("#ttTabsCheckbox").hide();
+      jQuery("#tabRow").hide();
+    }
+  }
+  else {
+    jQuery("#ttTabsCheckbox").hide();
+    jQuery("#tabRow").hide();
+    if(jQuery('#buttonTabsCheckbox').is(':checked')){
+      jQuery('#buttonTabsCheckbox').click();
+    }
+  }
 }
 
 // Function for splitting code into tabs for every new file, activated when checking the Show Tabs checkbox
@@ -2425,11 +3074,13 @@ Action.getLanguage = function()
   }
   else if(Page.useGvStateDiagram) {language="language=stateDiagram"}
   else if(Page.useStructureDiagram) {language="language=StructureDiagram"}
-  
+ 
+
   // append any suboptions needed for GvStateDiagram
   if(Page.useGvStateDiagram) { 
     if(!Page.showActions) language=language+".hideactions";
     if(Page.showTransitionLabels) language=language+".showtransitionlabels";
+    if(!Page.showGuards) language=language+".hideguards";    
     if(Page.showGuardLabels) language=language+".showguardlabels";
     language=language+"."+$("inputGenerateCode").value.split(":")[1];
   }
@@ -2438,9 +3089,11 @@ Action.getLanguage = function()
     if(Page.showMethods) language=language+".showmethods";
     if(!Page.showAttributes) language=language+".hideattributes";
   }
-  if(Page.useGvFeatureDiagram) {language="language=featureDiagram"}
-
-
+  // append any suboptions needed for GvFeatureDiagram
+  if(Page.useGvFeatureDiagram) {
+    language="language=featureDiagram";
+    if(Page.showFeatureDependency) language=language+".showFeatureDependency";
+  }
   return language;
 }
 
@@ -2459,3 +3112,233 @@ function showTab(event)
   jQuery('#innerGeneratedCodeRow').hide();
 }
 
+Action.hidegdpr = function() 
+{
+  jQuery('#gdprtext').hide();
+  Action.gdprHidden = true;
+}
+
+Action.reindent = function(lines, cursorPos)
+{
+  var offset = "";
+  var codeAfterIndent = "";
+  var len = lines.length;
+  var inBlockComment = false;
+  var statementEnd = true; // i.e. have semicolon at the end of the statement.
+  var statementEndIndentSpace = 0;
+  var indexOfCursor = -1;
+  for (var i = 0; i < len; i++) 
+  {
+    var trimmedLine = lines[i].trim();
+
+    // remove quotation
+    var indexOfFirstQuote  = trimmedLine.indexOf("\"");
+    var indexOfLastQuote = trimmedLine.indexOf("\"", indexOfFirstQuote + 1);
+    while (indexOfFirstQuote != -1 && indexOfLastQuote != -1)
+    {
+      trimmedLine = trimmedLine.slice(0, indexOfFirstQuote) + trimmedLine.slice(indexOfLastQuote+1, trimmedLine.length);
+      indexOfFirstQuote  = trimmedLine.indexOf("\"");
+      indexOfLastQuote = trimmedLine.indexOf("\"", indexOfFirstQuote + 1);
+    }
+
+    // remove comment
+    if (trimmedLine.indexOf("//") != -1)
+    {
+      trimmedLine = trimmedLine.substr(0, trimmedLine.indexOf("//")).trim();
+    }
+
+    if (inBlockComment)
+    {
+      if (trimmedLine.indexOf("*/") != -1)
+      {
+        trimmedLine = trimmedLine.substr(trimmedLine.indexOf("*/") + 2).trim();
+        inBlockComment = false;
+      }
+      else {
+        if (i != lines.length -1)
+        {
+          codeAfterIndent += lines[i] + "\n";
+        } else {
+          codeAfterIndent += lines[i];
+        }
+        continue;
+      }
+    }
+    else if (trimmedLine.indexOf("/*") != -1)
+    {
+      if (trimmedLine.indexOf("*/") == -1)
+      {
+        inBlockComment = true;
+        trimmedLine = trimmedLine.substr(0, trimmedLine.indexOf("/*")).trim();
+      }
+      else
+      {
+        trimmedLine = trimmedLine.substr(0, trimmedLine.indexOf("/*")) + trimmedLine.substr(trimmedLine.indexOf("*/") + 2).trim(); // remove block comment for trimmed line
+      }
+      
+    }
+    
+    var indexOfOpenCurlyBrace = trimmedLine.indexOf("{");
+    var indexOfCloseCurlyBrace = trimmedLine.indexOf("}");
+    var indexOfSemiColon = trimmedLine.indexOf(";");
+    
+    if (indexOfSemiColon != -1 && indexOfSemiColon != trimmedLine.length - 1 && trimmedLine.substr(indexOfSemiColon+1).trim().charAt(0) != "}")
+    {
+      lines.splice(i + 1, 0, trimmedLine.substr(indexOfSemiColon + 1));
+      if (i <= cursorPos.line)
+      {
+        cursorPos.line++;
+      }
+      lines[i] = lines[i].substr(0, lines[i].match(/^\s*/)[0].length + indexOfSemiColon + 1);
+      Action.reindent(lines, cursorPos);
+      return;
+    }
+
+    var doNotIndent = indexOfOpenCurlyBrace != -1 && indexOfCloseCurlyBrace != -1 && indexOfCloseCurlyBrace - indexOfOpenCurlyBrace < 40 && trimmedLine.substr(0, indexOfCloseCurlyBrace).indexOf("{", indexOfOpenCurlyBrace + 1) == -1;
+    if (doNotIndent)
+    {
+      if (indexOfCloseCurlyBrace != trimmedLine.length - 1)
+      {
+        lines.splice(i + 1, 0, trimmedLine.substr(indexOfCloseCurlyBrace + 1));
+        if (i <= cursorPos.line)
+        {
+          cursorPos.line++;
+        }
+        lines[i] = lines[i].substr(0, lines[i].match(/^\s*/)[0].length + indexOfCloseCurlyBrace + 1);
+        Action.reindent(lines, cursorPos);
+        return;
+      }
+      
+      if (!statementEnd)
+      {
+        if (trimmedLine.slice(-1) == "{")
+        {
+          statementEnd = true;
+        } 
+        else 
+        {
+          lines[i] = offset + lines[i].match(/^\s*/)[0].substr(statementEndIndentSpace) + lines[i].trim();
+          if (trimmedLine.indexOf(";") == trimmedLine.length - 1)
+          {
+            statementEnd = true;
+          }
+        }
+      }
+      else
+      {
+        lines[i] = offset + lines[i].trim();
+      }
+    }
+    else 
+    {
+      if (indexOfOpenCurlyBrace != -1 && indexOfOpenCurlyBrace != trimmedLine.length - 1) // put code after an open curly bracket to next line
+      {
+        lines.splice(i + 1, 0, trimmedLine.substr(indexOfOpenCurlyBrace + 1));
+        lines[i] = lines[i].substr(0, lines[i].match(/^\s*/)[0].length + indexOfOpenCurlyBrace + 1);
+        if (i <= cursorPos.line)
+        {
+          cursorPos.line++;
+        }
+        Action.reindent(lines, cursorPos);
+        return;
+      }
+
+      if (indexOfCloseCurlyBrace != -1 && trimmedLine.length > 1)
+      {
+        if (indexOfCloseCurlyBrace == 0)
+        {
+          lines.splice(i + 1, 0, trimmedLine.substr(1));
+          lines[i] = "}";
+          if (i <= cursorPos.line)
+          {
+            cursorPos.line++;
+          }
+        } else {
+          lines.splice(i + 1, 0, "}");
+          if (i <= cursorPos.line)
+          {
+            cursorPos.line++;
+          }
+          if (indexOfCloseCurlyBrace != trimmedLine.length - 1) // there is code after close curly bracket
+          {
+            lines.splice(i + 2, 0, trimmedLine.substr(indexOfCloseCurlyBrace + 1));
+            if (i <= cursorPos.line)
+            {
+              cursorPos.line++;
+            }
+          }
+          lines[i] = lines[i].substr(0, lines[i].match(/^\s*/)[0].length + indexOfCloseCurlyBrace);
+        }
+        Action.reindent(lines, cursorPos);
+        return;
+      }
+
+
+      if (statementEnd && trimmedLine.indexOf(";") != trimmedLine.length - 1 && trimmedLine.slice(-1) != "{" && trimmedLine.slice(-1) != "}" && trimmedLine.slice(-2) != "||")
+      {
+        statementEnd = false;
+        statementEndIndentSpace = lines[i].match(/^\s*/)[0].length;
+      }
+
+      if (indexOfCloseCurlyBrace != -1)
+      {
+        offset = offset.substr(2);
+      }
+
+      if (!statementEnd)
+      {
+        if (trimmedLine.slice(-1) == "{" || trimmedLine.slice(-2) == "||" && trimmedLine.slice(-1) == "}")
+        {
+          statementEnd = true;
+          lines[i] = offset + lines[i].trim();
+        } 
+        else 
+        {
+          lines[i] = offset + lines[i].match(/^\s*/)[0].substr(statementEndIndentSpace) + lines[i].trim();
+          if (trimmedLine.indexOf(";") == trimmedLine.length - 1)
+          {
+            statementEnd = true;
+          }
+        }
+      }
+      else
+      {
+        lines[i] = offset + lines[i].trim();
+      }
+
+      if (indexOfOpenCurlyBrace != -1)
+      {
+        offset += "  ";
+      }
+    }
+
+    if (i != lines.length -1)
+    {
+      codeAfterIndent += lines[i] + "\n";
+    } else {
+      codeAfterIndent += lines[i];
+    }
+  }
+  
+  if(Page.codeMirrorOn) 
+  {
+    Page.codeMirrorEditor.setValue(codeAfterIndent);
+  }
+  jQuery("#umpleModelEditorText").val(codeAfterIndent);
+
+  var cursorLine = Page.getRawUmpleCode().split("\n")[cursorPos.line];
+  var whiteSpace = cursorLine.match(/^\s*/)[0].length;
+  if (cursorPos.ch >= cursorLine.trim().length) 
+  {
+    Page.codeMirrorEditor.setCursor(cursorPos.line, cursorLine.trim().length + whiteSpace);
+  }
+  else if (cursorPos.ch >= 0)
+  {
+    Page.codeMirrorEditor.setCursor(cursorPos.line, cursorPos.ch+whiteSpace);
+  }
+  else
+  {
+    Page.codeMirrorEditor.setCursor(cursorPos.line, 0);
+  }
+  Page.codeMirrorEditor.focus();
+}
